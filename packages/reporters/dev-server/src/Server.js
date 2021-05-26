@@ -405,7 +405,8 @@ export default class Server {
         app.use(proxyMiddleware);
         proxies.push({
           proxyMiddleware,
-          ws: options.ws
+          context,
+          options
         });
       }
     }
@@ -456,7 +457,10 @@ export default class Server {
       });
       
       server.on('upgrade', (req, socket, head) => {
-        proxies.filter(({ws}) => ws).forEach(({proxyMiddleware}) => proxyMiddleware.upgrade(req, socket, head)); 
+        // Only upgrade websocket proxies and matching contexts
+        proxies
+          .filter(({context, options}) => options.ws == true && req.headers.upgrade.toLowerCase() === 'websocket' && req.url === context)
+          .forEach(({proxyMiddleware}) => proxyMiddleware.upgrade(req, socket, head)); 
       });
     });
   }
