@@ -365,6 +365,8 @@ export default class Server {
   async applyProxyTable(app: any): Promise<Server> {
     // avoid skipping project root
     const fileInRoot: string = path.join(this.options.projectRoot, '_');
+    const proxies = [];
+  
 
     const pkg = await loadConfig(
       this.options.inputFS,
@@ -374,7 +376,7 @@ export default class Server {
     );
 
     if (!pkg || !pkg.config || !pkg.files) {
-      return this;
+      return proxies;
     }
 
     const cfg = pkg.config;
@@ -386,7 +388,7 @@ export default class Server {
           message:
             "Proxy configuration file '.proxyrc.js' should export a function. Skipping...",
         });
-        return this;
+        return proxies;
       }
       cfg(app);
     } else if (filename === '.proxyrc' || filename === '.proxyrc.json') {
@@ -399,11 +401,17 @@ export default class Server {
       }
       for (const [context, options] of Object.entries(cfg)) {
         // each key is interpreted as context, and value as middleware options
-        app.use(createProxyMiddleware(context, options));
+        const proxyMiddleware = createProxyMiddleware(context, options);
+        app.use(proxyMiddleware);
+        proxies.push({
+          proxyMiddleware,
+          context,
+          options
+        });
       }
     }
 
-    return this;
+    return proxies;
   }
 
   async start(): Promise<HTTPServer> {
@@ -419,7 +427,7 @@ export default class Server {
     };
 
     const app = connect();
-    await this.applyProxyTable(app);
+    const proxies = await this.applyProxyTable(app);
     app.use(finalHandler);
 
     let {server, stop} = await createHTTPServer({
@@ -433,6 +441,7 @@ export default class Server {
     this.stopServer = stop;
 
     server.listen(this.options.port, this.options.host);
+
     return new Promise((resolve, reject) => {
       server.once('error', err => {
         this.options.logger.error(
@@ -445,6 +454,13 @@ export default class Server {
 
       server.once('listening', () => {
         resolve(server);
+      });
+      
+      server.on('upgrade', (req, socket, head) => {
+        // Only upgrade websocket proxies and matching contexts
+        proxies
+          .filter(({context, options}) => options.ws == true && req.headers.upgrade.toLowerCase() === 'websocket' && req.url === context)
+          .forEach(({proxyMiddleware}) => proxyMiddleware.upgrade(req, socket, head)); 
       });
     });
   }
